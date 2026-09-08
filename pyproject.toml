@@ -1,0 +1,73 @@
+[project]
+name = "jurisast"
+version = "0.1.0"
+description = "JurisAST: Formally Verified Information Flow Control for Multi-Agent Systems via Neuro-Symbolic Execution Firewalls"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "JurisAST Team"},
+]
+
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "z3-solver>=4.12",
+    "pydantic-ai>=0.1",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-benchmark>=4.0",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.backends"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "libs/jurisast-core/src/jurisast_core",
+    "libs/jurisast-pydantic/src/jurisast_pydantic",
+    "libs/jurisast-policies/src/jurisast_policies",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [
+    "libs/jurisast-core/src",
+    "libs/jurisast-pydantic/src",
+    "libs/jurisast-policies/src",
+]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "benchmark: marks benchmark tests",
+    "property: marks property-based tests",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "TCH"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
