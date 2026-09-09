@@ -45,7 +45,7 @@
 - **Legal Mandate**: Processing of financial, biometric, health, and sensitive personal data requires elevated safeguards and explicit prohibition from flowing to unrestricted external sinks.
 - **JurisAST Formalization**:
   Special category data is assigned `Classification.SENSITIVE_PII` or `Classification.RESTRICTED`. Sinks accepting this data must possess clearance at or above this level:
-  $$\forall s, \quad \text{Classification}(s) = \text{SENSITIVE\_PII} \implies \text{MaxClassification}(k) \ge \text{SENSITIVE\_PII}$$
+  $$\forall s, \quad \text{Classification}(s) = \text{SENSITIVE}\_\text{PII} \implies \text{MaxClassification}(k) \ge \text{SENSITIVE}\_\text{PII}$$
 
 ### 2.3 Article 5(1)(c) (Data Minimization Principle)
 

@@ -166,7 +166,7 @@ JurisAST models information security labels as an algebraic product lattice $\ma
 1. **$\mathcal{J}$ (Jurisdiction)** is a totally ordered set of geographic sovereignties:
    $$\text{INTERNAL} (0) < \text{EU} (10) < \text{UK} (20) < \text{US} (30) < \text{APAC} (40) < \text{EXTERNAL} (100)$$
 2. **$\mathcal{C}$ (Classification)** is a totally ordered set of sensitivity levels:
-   $$\text{PUBLIC} (0) < \text{INTERNAL\_ONLY} (10) < \text{CONFIDENTIAL} (20) < \text{PII} (30) < \text{SENSITIVE\_PII} (40) < \text{RESTRICTED} (50)$$
+   $$\text{PUBLIC} (0) < \text{INTERNAL}\_\text{ONLY} (10) < \text{CONFIDENTIAL} (20) < \text{PII} (30) < \text{SENSITIVE}\_\text{PII} (40) < \text{RESTRICTED} (50)$$
 3. **$\mathcal{P}(\mathcal{K})$ (Compartments)** is the boolean powerset lattice of categorical compartments under subset inclusion $\subseteq$.
 
 ### Lattice Operations

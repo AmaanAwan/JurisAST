@@ -41,8 +41,7 @@
 ## 📚 Documentation Index
 
 | Guide | Description |
-|:---|
-|:---|
+|:---|:---|
 | 📖 [**Developer Quickstart**](docs/quickstart.md) | Step-by-step tutorial on labels, taint tracking, AST construction, Z3 solving, and regulatory policies |
 | 🏛️ [**System Architecture**](docs/architecture.md) | In-depth technical architecture, neuro-symbolic firewall concept, and sequence diagrams |
 | 📜 [**API Reference**](docs/api_reference.md) | Complete reference for all classes, methods, and types in `jurisast-core`, `jurisast-pydantic`, and `jurisast-policies` |

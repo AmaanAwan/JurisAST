@@ -52,7 +52,7 @@ In JurisAST, this guarantees that an adversary observing an external sink (e.g.,
 
 ## 3. Z3 SMT Constraint Encodings
 
-The execution graph $G = (V, E)$ is translated into first-order logic formulas over the theory of Linear Integer Arithmetic ($\text{QF\_LIA}$) and Booleans.
+The execution graph $G = (V, E)$ is translated into first-order logic formulas over the theory of Linear Integer Arithmetic ($\text{QF}\_\text{LIA}$) and Booleans.
 
 ### 3.1 Data Source Nodes ($v \in V_{\text{source}}$)
 For each source node with security label $\ell = (j_\ell, c_\ell)$:
@@ -98,7 +98,7 @@ $$I(X; Y) = H(Y) - H(Y \mid X) \le H(Y) \le \log_2(|\mathcal{Y}|)$$
 ### 4.2 Enforcement Invariant
 A `DeclassifyNode` is certified valid if and only if:
 1. The output type is a compiled structural primitive (not open-ended text).
-2. The computed information bound satisfies $\log_2(|\mathcal{Y}|) \le \text{max\_bits}$.
+2. The computed information bound satisfies $\log_2(|\mathcal{Y}|) \le \text{max}\_\text{bits}$.
 3. The LLM output was validated under strict schema parsing.
 
 ### 4.3 Subadditivity for Structured Models
@@ -122,6 +122,6 @@ The constraint is encoded as:
 $$\alpha_{c, u, v} \implies \neg \left( \text{Violation}_c(u, v) \right)$$
 
 Where:
-$$\text{Violation}_c(u, v) = \left( \bigvee_{j \in \mathcal{J}_{\text{src}}} \text{jurisdiction}(u) = j \right) \land \left( \text{classification}(u) \ge C_{\text{min}} \right) \land \left( \text{target\_jurisdiction}(v) \in \mathcal{J}_{\text{forbidden}} \right)$$
+$$\text{Violation}_c(u, v) = \left( \bigvee_{j \in \mathcal{J}_{\text{src}}} \text{jurisdiction}(u) = j \right) \land \left( \text{classification}(u) \ge C_{\text{min}} \right) \land \left( \text{target}\_\text{jurisdiction}(v) \in \mathcal{J}_{\text{forbidden}} \right)$$
 
 If $u$ represents a valid declassification path, its security variables are reset to the downgraded output label $\ell_{\text{out}}$, ensuring $\text{Violation}_c(u, v)$ evaluates to $\text{False}$, allowing legitimate anonymized data to flow freely.
