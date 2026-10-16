@@ -2,7 +2,7 @@
 
 **Formally Verified Information Flow Control for Multi-Agent Systems via Neuro-Symbolic Execution Firewalls**
 
-[![Tests](https://img.shields.io/badge/tests-324%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-346%20passed-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![SMT: Z3](https://img.shields.io/badge/SMT-Microsoft%20Z3-blueviolet.svg)](https://github.com/Z3Prover/z3)
@@ -11,18 +11,21 @@
 > [!WARNING]
 > ### ⚠️ DISCLAIMER: EXPERIMENTAL & UNDER ACTIVE DEVELOPMENT
 > **JurisAST is currently in active development and early testing. It has NOT been comprehensively tested or validated for production use.**
-> - **Do NOT trust or rely on this project for production systems, real-world security enforcement, or legally binding compliance (GDPR, EU AI Act, PCI-DSS).**
+> - **Do NOT trust or rely on this project for production systems, real-world security enforcement, or legally binding compliance (GDPR, EU AI Act, PCI-DSS, HIPAA, CCPA, ITAR).**
 > - The codebase is an early experimental implementation and may contain bugs, unverified edge cases, or breaking API changes.
 > - This project is shared publicly for **research, peer review, and community testing only**. Use at your own risk.
 
-> **Decoupling reasoning from verification**: Pydantic AI extracts an agent's multi-step intent into a strict Abstract Syntax Tree (AST), and a Microsoft Z3 SMT solver mathematically proves that the execution graph complies with cross-border data sovereignty laws (e.g., GDPR, EU AI Act, PCI-DSS) in **< 5ms** before any external API is triggered.
+> **Decoupling reasoning from verification**: Pydantic AI extracts an agent's multi-step intent into a strict Abstract Syntax Tree (AST), and a Microsoft Z3 SMT solver mathematically proves that the execution graph complies with cross-border data sovereignty and safety laws (e.g., GDPR, EU AI Act, PCI-DSS, HIPAA, CCPA, DORA, ITAR, Colorado AI Act, ISO 42001) in **< 5ms** before any external API is triggered.
 
 ---
 
 ## Target Domains
 
-- **RegTech** — Automated regulatory compliance (GDPR Art. 44-49, EU AI Act Art. 10/12)
-- **FinTech** — High-frequency financial pipelines, PCI-DSS v4.0 cardholder protection
+- **RegTech & Data Privacy** — Automated regulatory compliance (GDPR Art. 44-49, CCPA/CPRA, APAC PIPL/DPDPA)
+- **AI Governance & Safety** — EU AI Act (Art. 10/12), Colorado AI Act (SB 24-205), ISO/IEC 42001 & NIST AI RMF
+- **FinTech & Resilience** — High-frequency financial pipelines, PCI-DSS v4.0 cardholder isolation, DORA operational resilience
+- **HealthTech & Life Sciences** — HIPAA § 164.312/514 ePHI containment and Safe Harbor de-identification
+- **Defense & Dual-Use Tech** — ITAR (22 CFR 120-130) & EAR (15 CFR 730-774) technical data non-export
 - **Autonomous Enterprise Systems** — Multi-agent orchestration with cross-border data sovereignty
 
 ---
@@ -48,6 +51,7 @@
 | ⚖️ [**Regulatory Mapping**](docs/regulatory_mapping.md) | Formal translation of GDPR, EU AI Act, and PCI-DSS rules into lattice invariants and policy sets |
 | 📐 [**Formal Verification**](docs/formal_verification.md) | Mathematical specification of product lattices, non-interference theorems, and Shannon bounding |
 | 🚀 [**Real-World Examples**](examples/README.md) | Two end-to-end runnable demos: M&A data exfiltration prevention and GDPR-compliant FinTech cross-border flows |
+| 📊 [**Benchmarks & Evaluation**](docs/benchmarks.md) | Empirical evaluation: JurisAST Z3 firewall vs. Gemini LLM-as-a-Judge and heuristic baselines |
 | 🤝 [**Contributing Guide**](CONTRIBUTING.md) | Setup, formatting, type checking, and pull request workflows |
 | 🔒 [**Security Policy**](SECURITY.md) | Threat model, defense-in-depth architecture, and vulnerability reporting |
 
@@ -67,7 +71,7 @@ cd JurisAST-Agents
 # Install in development mode
 pip install -e ".[dev]"
 
-# Run all 324 unit, property, and integration tests
+# Run all 346 unit, property, and integration tests
 pytest tests/ -v
 
 # Run real-world examples (requires Gemini API key)

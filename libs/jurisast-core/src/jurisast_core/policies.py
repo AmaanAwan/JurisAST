@@ -221,19 +221,8 @@ class PolicySet(BaseModel):
                     if constraint.source_classification_min is not None:
                         conditions.append(ic >= constraint.source_classification_min.value)
 
-                    # If no specific conditions, any incoming flow violates
-                    if not conditions:
-                        violation_expr = Bool(f"viol_{assumption_name}")
-                        solver._solver.add(violation_expr == True)  # noqa: E712
-                    elif len(conditions) == 1:
-                        violation_expr = conditions[0]
-                    else:
-                        violation_expr = And(*conditions)
-
-                    # Invariant: the violation condition must NOT hold
-                    safe_formula = Not(violation_expr)
-
                     # Check compartment restrictions statically if present
+                    comp_violated = False
                     if constraint.forbidden_compartments:
                         input_node = graph.get_node(input_id)
                         # Check if this input node carries forbidden compartments
@@ -242,10 +231,26 @@ class PolicySet(BaseModel):
                         )
                         if node_label and hasattr(node_label, "compartments"):
                             if node_label.compartments & constraint.forbidden_compartments:
-                                # Unconditionally violated for this input
-                                false_bool = Bool(f"comp_violation_{assumption_name}")
-                                solver._solver.add(Not(false_bool))
-                                safe_formula = false_bool
+                                comp_violated = True
+
+                    if comp_violated:
+                        false_bool = Bool(f"comp_violation_{assumption_name}")
+                        solver._solver.add(Not(false_bool))
+                        safe_formula = false_bool
+                    elif not conditions:
+                        if constraint.forbidden_compartments:
+                            # Constrained only by compartments, which were not present on this node
+                            safe_bool = Bool(f"comp_ok_{assumption_name}")
+                            solver._solver.add(safe_bool == True)  # noqa: E712
+                            safe_formula = safe_bool
+                        else:
+                            violation_expr = Bool(f"viol_{assumption_name}")
+                            solver._solver.add(violation_expr == True)  # noqa: E712
+                            safe_formula = Not(violation_expr)
+                    elif len(conditions) == 1:
+                        safe_formula = Not(conditions[0])
+                    else:
+                        safe_formula = Not(And(*conditions))
 
                     desc = (
                         f"[{constraint.regulation}] {constraint.description}: "

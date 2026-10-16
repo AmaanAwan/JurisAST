@@ -33,6 +33,28 @@ GDPR_DATA_SOVEREIGNTY = PolicySet(
             action=ConstraintAction.BLOCK,
         ),
         FlowConstraint(
+            name="eu_restricted_no_export",
+            description="EU Restricted data (keys, board secrets) cannot exit EU/INTERNAL boundary",
+            regulation="GDPR Article 32",
+            source_jurisdictions={Jurisdiction.EU},
+            source_classification_min=Classification.RESTRICTED,
+            forbidden_sink_jurisdictions={
+                Jurisdiction.US,
+                Jurisdiction.APAC,
+                Jurisdiction.EXTERNAL,
+            },
+            action=ConstraintAction.BLOCK,
+        ),
+        FlowConstraint(
+            name="eu_pii_no_apac_transfer",
+            description="EU PII/Sensitive PII cannot flow to APAC third countries without adequacy decision",
+            regulation="GDPR Article 44 / 45",
+            source_jurisdictions={Jurisdiction.EU},
+            source_classification_min=Classification.PII,
+            forbidden_sink_jurisdictions={Jurisdiction.APAC},
+            action=ConstraintAction.BLOCK,
+        ),
+        FlowConstraint(
             name="eu_pii_no_external_without_declassification",
             description="EU PII cannot reach any EXTERNAL sink without verified declassification",
             regulation="GDPR Article 44",
@@ -49,19 +71,6 @@ GDPR_DATA_SOVEREIGNTY = PolicySet(
             source_jurisdictions={Jurisdiction.EU},
             source_classification_min=Classification.SENSITIVE_PII,
             action=ConstraintAction.AUDIT,
-        ),
-        FlowConstraint(
-            name="eu_restricted_no_export",
-            description="EU Restricted data (keys, board secrets) cannot exit EU/INTERNAL boundary",
-            regulation="GDPR Article 32",
-            source_jurisdictions={Jurisdiction.EU},
-            source_classification_min=Classification.RESTRICTED,
-            forbidden_sink_jurisdictions={
-                Jurisdiction.US,
-                Jurisdiction.APAC,
-                Jurisdiction.EXTERNAL,
-            },
-            action=ConstraintAction.BLOCK,
         ),
     ],
 )

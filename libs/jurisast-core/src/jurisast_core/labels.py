@@ -299,6 +299,36 @@ LABEL_US_INTERNAL = SecurityLabel(
 )
 """US internal business data (non-sensitive)."""
 
+LABEL_US_PII = SecurityLabel(
+    jurisdiction=Jurisdiction.US,
+    classification=Classification.PII,
+)
+"""Standard US consumer personal data."""
+
+LABEL_US_SENSITIVE_PII = SecurityLabel(
+    jurisdiction=Jurisdiction.US,
+    classification=Classification.SENSITIVE_PII,
+)
+"""US sensitive personal data (ePHI, SPI, credit info)."""
+
+LABEL_US_RESTRICTED = SecurityLabel(
+    jurisdiction=Jurisdiction.US,
+    classification=Classification.RESTRICTED,
+)
+"""US restricted data (defense technical data, critical infrastructure)."""
+
+LABEL_APAC_PII = SecurityLabel(
+    jurisdiction=Jurisdiction.APAC,
+    classification=Classification.PII,
+)
+"""Standard APAC personal information (e.g. under PIPL or DPDPA)."""
+
+LABEL_APAC_RESTRICTED = SecurityLabel(
+    jurisdiction=Jurisdiction.APAC,
+    classification=Classification.RESTRICTED,
+)
+"""APAC restricted data (e.g. CIIO critical data)."""
+
 LABEL_EXTERNAL_PUBLIC = SecurityLabel(
     jurisdiction=Jurisdiction.EXTERNAL,
     classification=Classification.PUBLIC,
