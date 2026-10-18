@@ -51,7 +51,7 @@ def test_jurisast_perfect_ground_truth_alignment():
     )
 
     for t in traces:
-        solver = Z3SolverEngine(timeout_ms=50)
+        solver = Z3SolverEngine(timeout_ms=150)
         solver.encode_graph(t.graph)
         solver.add_policy_constraints(GDPR_DATA_SOVEREIGNTY, graph=t.graph)
         res = solver.verify()

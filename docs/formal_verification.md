@@ -73,6 +73,25 @@ $$\text{Check}(\alpha_1, \alpha_2, \dots, \alpha_n)$$
 - If **SAT**: All assumptions are mutually consistent; no non-interference invariants are violated. $\implies \text{SAFE}$.
 - If **UNSAT**: At least one assumption contradicts the asserted graph facts. Z3 computes the minimal unsatisfiable subset $\mathcal{U} \subseteq \{\alpha_1, \dots, \alpha_n\}$, precisely attributing the violating flow without false positives.
 
+### 3.5 Field Projection Nodes ($v \in V_{\text{proj}}$)
+Let $u \in \text{Pred}(v)$ be the composite parent record, and let $\ell_f = (j_f, c_f, K_f)$ be the specific label of projected field $f$. The projection asserts:
+$$\text{jurisdiction}(v) = j_f \quad \land \quad \text{classification}(v) = c_f$$
+$$\forall k \in K_f: \text{has\_compartment}(v, k) = \text{True}$$
+$$\forall k \notin K_f: \text{has\_compartment}(v, k) = \text{False}$$
+By lattice construction, $\ell_f \sqsubseteq \ell(u)$. Isolating $\ell_f$ prevents conservative over-tainting and eliminates label creep on downstream sinks.
+
+### 3.6 Conversational Response Sink Nodes ($v \in V_{\text{chat}}$)
+Let $\ell_{\text{user}} = (j_{\text{user}}, c_{\text{user}}, K_{\text{user}})$ be the recipient's clearance label, and let $\text{SessionInputs}(v)$ be all sources consumed during the interactive run session. For each $u \in \text{SessionInputs}(v)$, an assumption literal $\alpha_{u, v}$ asserts:
+$$\alpha_{u, v} \implies \left( \text{jurisdiction}(u) \le j_{\text{user}} \quad \land \quad \text{classification}(u) \le c_{\text{user}} \quad \land \quad \text{compartments}(u) \subseteq K_{\text{user}} \right)$$
+If the session ingested confidential data exceeding $\ell_{\text{user}}$, Z3 proves UNSAT and the response is safely intercepted and redacted before delivery.
+
+### 3.7 Human-Attested Declassification Nodes ($v \in V_{\text{hitl}}$)
+Let $u \in \text{Pred}(v)$ be the tainted input node, and let $\ell_{\text{target}}$ be the approved downgraded label:
+$$\text{jurisdiction}(v) = j_{\text{target}} \quad \land \quad \text{classification}(v) = c_{\text{target}}$$
+$$\forall k \in K_{\text{target}}: \text{has\_compartment}(v, k) = \text{True}$$
+$$\forall k \notin K_{\text{target}}: \text{has\_compartment}(v, k) = \text{False}$$
+This node is certified in the AST if and only if accompanied by a valid `AttestationToken` whose HMAC-SHA256 signature is verified against the human authority's secret key.
+
 ---
 
 ## 4. Symbolic Declassification & Information Bounding
@@ -93,6 +112,7 @@ $$I(X; Y) = H(Y) - H(Y \mid X) \le H(Y) \le \log_2(|\mathcal{Y}|)$$
 | `Literal["low", "medium", "high"]` | $3$ | $\mathbf{1.585\text{ bits}}$ |
 | `Enum` (8 members) | $8$ | $\mathbf{3.000\text{ bits}}$ |
 | `int` (range $[0, 255]$) | $256$ | $\mathbf{8.000\text{ bits}}$ |
+| Slotted Template (3 finite slots) | $\prod |S_i| = 3 \times 3 \times 5 = 45$ | $\mathbf{5.492\text{ bits}}$ |
 | Arbitrary unstructured `str` (100 tokens) | $V^{100} \approx (10^5)^{100}$ | $\approx \mathbf{1661\text{ bits}}$ (Unbounded Exfiltration Risk) |
 
 ### 4.2 Enforcement Invariant
@@ -101,14 +121,20 @@ A `DeclassifyNode` is certified valid if and only if:
 2. The computed information bound satisfies $\log_2(|\mathcal{Y}|) \le \text{max}\_\text{bits}$.
 3. The LLM output was validated under strict schema parsing.
 
-### 4.3 Subadditivity for Structured Models
-For composite Pydantic `BaseModel` schemas $Y = (Y_1, Y_2, \dots, Y_m)$, Shannon joint entropy satisfies subadditivity:
-$$H(Y_1, Y_2, \dots, Y_m) \le \sum_{i=1}^m H(Y_i) \le \sum_{i=1}^m \log_2(|\mathcal{Y}_i|)$$
+### 4.3 Subadditivity for Structured Models & Slotted Templates
+For composite Pydantic `BaseModel` schemas and `SlottedTemplate` instances $Y = (S_1, S_2, \dots, S_m)$, Shannon joint entropy satisfies subadditivity:
+$$H(S_1, S_2, \dots, S_m) \le \sum_{i=1}^m H(S_i) \le \sum_{i=1}^m \log_2(|\mathcal{S}_i|)$$
 
 For bounded integer intervals $Z \in [A, B]$:
 $$H(Z) \le \log_2(B - A + 1)$$
 
-If any constituent field has unbounded entropy (e.g. `str`, unconstrained `float`), the total bound diverges to $\infty$ and declassification is rejected.
+If any constituent field has unbounded entropy (e.g. open `str`, unconstrained `float`), the total bound diverges to $\infty$ and algorithmic declassification is rejected.
+
+### 4.4 Cryptographic Human-in-the-Loop Attestation
+For unstructured natural language summaries that cannot be algorithmically bounded:
+Let $\tau = \langle \text{token\_id}, \text{approver\_id}, \text{content\_hash}, \ell_{\text{target}}, t_{\text{issued}}, t_{\text{expires}}, \sigma \rangle$ be an attestation token, where:
+$$\sigma = \text{HMAC-SHA256}_{K_{\text{secret}}}(\text{token\_id} \parallel \text{approver\_id} \parallel \text{content\_hash} \parallel \ell_{\text{target}} \parallel t_{\text{issued}} \parallel t_{\text{expires}})$$
+Under the standard Existential Unforgeability under Chosen-Message Attack (EUF-CMA) assumption, an untrusted generative LLM cannot forge a valid signature $\sigma$ for any modified text $c' \neq c$, mathematically preventing unauthorized free-text declassifications.
 
 ---
 

@@ -62,26 +62,28 @@ Traditional security measures fail in this paradigm:
 
 ## 2. The Three Architectural Pillars
 
-### Pillar A: Pydantic-Driven AST Taint Propagation
+### Pillar A: Pydantic-Driven AST Taint Propagation & Field-Level Projections
 Data provenance is decoupled from LLM prompt context:
 - When sensitive data is retrieved, it is wrapped in an immutable `TaintedValue[T]` container bearing a `SecurityLabel`.
-- As data moves across tools and agents, transformations compute the **Least Upper Bound (Join)** of input labels.
-- When an agent initiates a tool call, Pydantic parses arguments and the `ToolCallExtractor` maps the runtime references into an `ExecutionGraph` composed of typed `ASTNode` instances.
+- **Field-Level Granularity**: For composite structured datasets, `TaintedRecord` enables fine-grained per-field security labels (`field_labels`), preventing monotonic label creep.
+- As data moves across tools and agents, transformations compute the **Least Upper Bound (Join)** of input labels, while explicit field projections (`ProjectionNode`) isolate the security label of specific attributes.
+- When an agent initiates a tool call, Pydantic parses arguments and the `ToolCallExtractor` maps runtime references and dot-notation accessors (`tool_result.field_name`) into an `ExecutionGraph` composed of typed `ASTNode` instances.
 
-### Pillar B: Latency-Free Non-Interference Proofs (Z3 SMT Solver)
+### Pillar B: Latency-Free Non-Interference Proofs & Conversational Firewalls
 Deterministic verification replaces probabilistic guessing:
 - The `ExecutionGraph` is converted into first-order logic formulas within the `Z3SolverEngine`.
-- Sinks are gated by Boolean assumptions representing non-interference invariants:
+- **Tool Sinks**: Tool sinks are gated by Boolean assumptions representing non-interference invariants:
   $$\forall s \in \text{Inputs}(sink), \quad (\text{Jurisdiction}(s) \le \text{TargetJurisdiction}) \land (\text{Classification}(s) \le \text{MaxClassification})$$
+- **Conversational Response Sinks (`ChatOutputSinkNode`)**: Natural language responses emitted back to the end-user are treated as formal information sinks. Session taint tracking ensures that an LLM cannot exfiltrate retrieved confidential facts directly into chat prose to an unprivileged user.
 - The solver checks validity in `< 5ms`.
-- If unsatisfied (`UNSAT`), Z3 extracts the minimal **Unsat Core**, identifying the exact source-to-sink route violating regulatory policy.
+- If unsatisfied (`UNSAT`), Z3 extracts the minimal **Unsat Core**, identifying the exact source-to-sink route violating regulatory policy, and enables automatic sanitization/redaction.
 
-### Pillar C: Symbolic Declassification via Constrained Decoding
+### Pillar C: Tripartite Symbolic Declassification & Information Bounding
 To enable legitimate business operations on tainted data without opening exfiltration channels:
-- Agents downgrade data through a designated `DeclassifyNode`.
-- The output is structurally constrained using Pydantic's strict type validation (`bool`, `Enum`, `Literal`).
-- Shannon Mutual Information transferred is bounded by $I(X; Y) \le \log_2(|\mathcal{Y}|)$.
-- The Z3 solver recognizes certified declassifier nodes as legitimate label transformations.
+1. **Bounded Discrete Declassification**: Outputs are structurally constrained using Pydantic's strict type validation (`bool`, `Enum`, `Literal`), bounding Shannon Mutual Information by $I(X; Y) \le \log_2(|\mathcal{Y}|)$.
+2. **Subadditive Slotted Templates (`SlottedTemplate`)**: Generates structured natural language by injecting strictly bounded typed slots into predefined templates, guaranteeing finite joint entropy $H(T) \le \sum \log_2(|S_i|)$.
+3. **Cryptographic Human Attestation (`HumanDeclassificationAuthority`)**: Allows safe release of synthesized free-text summaries via tamper-proof HMAC-SHA256 signatures issued by authorized human compliance officers.
+4. **Pattern & Compartment Scrubbing (`CompartmentScrubber`)**: Strips specific regulatory compartments (`pci_cardholder`, `ssn`, `phi`) via deterministic pattern redaction before sink egress.
 
 ---
 
@@ -190,23 +192,33 @@ All algebraic lattice invariants (commutativity, associativity, idempotency, abs
 |:---|:---|:---|
 | **Indirect Prompt Injection** | Malicious payload in retrieved web/document content instructs agent to exfiltrate private records. | Taint label remains anchored to the data payload; Z3 blocks external sinks regardless of LLM compliance with the prompt. |
 | **Context Collapse** | LLM cannot distinguish instructions from data in context window. | Provenance tracking is maintained out-of-band in the Python runtime (`TaintRegistry`), immune to prompt-level manipulation. |
+| **Conversational Exfiltration** | Attacker commands agent to disclose sensitive information directly in chat prose instead of calling tools. | `ChatOutputSinkNode` and `verify_chat_response()` verify user clearance vs session taint and redact violations. |
+| **Monotonic Label Creep** | Large composite objects with public and private fields block lawful downstream processing. | `TaintedRecord` and `ProjectionNode` allow sub-field isolation without false positive over-tainting. |
+| **Unbounded Free-Text Leakage** | Summarization of confidential data leaking hidden bits through generative natural language. | `HumanDeclassificationAuthority` (HMAC signatures) and `SlottedTemplate` (Shannon bounded) restrict generative leaks. |
 | **Multi-Hop Laundering** | Attacker routes tainted data through intermediate helper agents to wash provenance. | `AgentHandoffNode` preserves and joins taint labels across multi-agent handoffs. |
 | **Semantic Obfuscation** | Agent translates, paraphrases, or encodes PII in base64/rot13 to bypass regex/DLP gateways. | Verification operates on the logical AST and provenance graph, not raw string pattern matching. |
 | **High-Frequency Latency Bottleneck** | Security guardrail slows down FinTech trade pipeline. | Z3 incremental assumption solving executes in `< 5ms`, enabling real-time inline evaluation. |
 
 ---
 
-## 6. Real-World Demonstrations
+## 6. Real-World Demonstrations & Verification
 
-The [`examples/`](../examples/) directory contains two complete, runnable Pydantic AI agents that show the architecture above applied to real industry scenarios:
+The [`examples/`](../examples/) directory contains complete, runnable Pydantic AI agent applications:
 
-### Enterprise M&A Knowledge Worker ([`examples/enterprise_ma_agent/`](../examples/enterprise_ma_agent/))
+### 1. Live Google Gemini 2.5 Flash Verification ([`examples/live_gemini_enhancements_demo.py`](../examples/live_gemini_enhancements_demo.py))
+
+A live end-to-end verification script executing against Google Gemini 2.5 Flash:
+1. **Conversational Leak Defense**: Gemini is instructed to read a confidential M&A memo and reveal the offer price in chat prose without calling external tools. The JurisAST firewall intercepts the chat response and redacts it with `[REDACTED: SENSITIVE DATA EXCEEDS USER CLEARANCE]`.
+2. **Field-Level Projection**: Demonstrates composite records where `public_metrics` are safely emailed to external investors (verified in 3.67ms), while the `confidential_deal` field is blocked by Z3.
+3. **Cryptographic HITL & Slotted Templates**: Demonstrates HMAC-SHA256 human attestation (with 100% tamper detection) and subadditive 5.49-bit Shannon-bounded template synthesis.
+
+### 2. Enterprise M&A Knowledge Worker ([`examples/enterprise_ma_agent/`](../examples/enterprise_ma_agent/))
 
 Models the **Context Collapse** and **Indirect Prompt Injection** threat vectors. An investment bank agent reads board-level M&A strategy documents and has access to corporate email. A prompt injection attack attempts to exfiltrate the `INTERNAL/CONFIDENTIAL` strategy document to `competitor@externalfirm.com`. The firewall intercepts `send_email()`, proves `CONFIDENTIAL > PUBLIC` in the product lattice, and raises `TaintViolationError` before the network call fires.
 
 **Demonstrates:** `@tainted_source`, `@tainted_sink`, `@declassifier` (2-bit sentiment), `--attack` mode.
 
-### Global FinTech Support Agent ([`examples/fintech_support_agent/`](../examples/fintech_support_agent/))
+### 3. Global FinTech Support Agent ([`examples/fintech_support_agent/`](../examples/fintech_support_agent/))
 
 Models the **GDPR Article 44 cross-border transfer** constraint. A FinTech support agent fetches EU citizen banking records (`EU/SENSITIVE_PII`) and must create a Jira ticket for the US engineering team (`US/INTERNAL_ONLY`). The naive flow is GDPR-illegal. JurisAST enforces the policy by:
 1. Blocking `create_jira_ticket()` when the description is tainted with raw PII.

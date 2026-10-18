@@ -364,6 +364,32 @@ class ToolCallExtractor:
             if not isinstance(arg_value, str):
                 continue
 
+            # Check if arg value is a field projection (e.g. parent.field)
+            if "." in arg_value:
+                parent_key, field_name = arg_value.split(".", 1)
+                parent_tv = registry.lookup(parent_key)
+                if parent_tv is not None and field_name in parent_tv.field_labels:
+                    parent_node_id = f"src_{tool_name}_{parent_key.replace('.', '_')}"
+                    if parent_node_id not in builder._node_ids:
+                        builder.add_source(
+                            tool_name=parent_key,
+                            label=parent_tv.label,
+                            arguments={arg_name: parent_key},
+                            node_id=parent_node_id,
+                            description=f"Parent composite source for '{parent_key}'",
+                        )
+                    prj_node_id = f"prj_{tool_name}_{arg_name}"
+                    field_label = parent_tv.field_labels[field_name]
+                    builder.add_projection(
+                        input_node_id=parent_node_id,
+                        field_names=[field_name],
+                        projected_label=field_label,
+                        node_id=prj_node_id,
+                        description=f"Field projection of '{field_name}' from '{parent_key}'",
+                    )
+                    input_node_ids.append(prj_node_id)
+                    continue
+
             # Check if arg value is a registry key
             tv = registry.lookup(arg_value)
             if tv is not None and arg_value not in seen_keys:

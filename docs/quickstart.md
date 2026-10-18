@@ -53,16 +53,27 @@ tainted_record = TaintedValue.create(
     agent_id="retrieval_agent",
 )
 
-# 3. Propagate taint during transformation
-summary = tainted_record.propagate(
-    new_label=LABEL_EU_PII,
-    tool="summarize_profile",
-    agent_id="summarizer_agent",
-    details="Generated 50-word customer summary",
+# 3. Create a field-sensitive composite record (Mitigating Over-Tainting)
+from jurisast_core.taint import TaintedRecord
+
+composite_report = TaintedRecord.create(
+    data={
+        "public_metrics": "Revenue up 12% YoY",
+        "confidential_deal": "Hostile acquisition of Target X at $2B",
+    },
+    field_labels={
+        "public_metrics": LABEL_PUBLIC,
+        "confidential_deal": SecurityLabel(
+            jurisdiction=Jurisdiction.INTERNAL,
+            classification=Classification.CONFIDENTIAL,
+        ),
+    },
+    source_tool="fetch_quarterly_report",
 )
 
-print(f"Current Label: {summary.label}")
-print(f"Provenance Steps: {len(summary.provenance)}")
+# Individual fields can be projected without inheriting record-wide confidential taint:
+public_slice = composite_report.project("public_metrics")
+print(f"Projected Public Label: {public_slice.label}")  # INTERNAL / PUBLIC!
 ```
 
 ---
@@ -263,25 +274,84 @@ hipaa_policy = (
 
 ---
 
-## 8. Real-World Examples
+## 8. Defending Against Conversational Leaks & Using Field Projections
+
+### A. Conversational Response Firewalling
+Prevent agents from leaking sensitive facts directly in response text:
+
+```python
+from jurisast_core.labels import LABEL_PUBLIC
+from jurisast_core.exceptions import TaintViolationError
+
+# Agent generates a chat response after reading confidential data:
+raw_model_response = "The target company is Apex Analytics at $2.4B."
+
+try:
+    # Verifies chat response against session taint for unprivileged visitor (PUBLIC)
+    firewall.verify_chat_response(
+        response_text=raw_model_response,
+        user_clearance=LABEL_PUBLIC,
+        user_id="visitor_user",
+    )
+except TaintViolationError as e:
+    print(f"Intercepted conversational leak: {e}")
+
+# Or automatically sanitize:
+safe_text = firewall.sanitize_chat_response(raw_model_response, LABEL_PUBLIC)
+print(safe_text)  # "[REDACTED: SENSITIVE DATA EXCEEDS USER CLEARANCE]"
+```
+
+### B. Slotted Templates & Human-in-the-Loop Attestation
+
+```python
+from pydantic import BaseModel
+from typing import Literal
+from jurisast_core.declassifier import SlottedTemplate, HumanDeclassificationAuthority
+
+# 1. Finite Shannon-Bounded Template
+class StatusSlots(BaseModel):
+    project: Literal["Alpha", "Beta"]
+    status: Literal["approved", "rejected"]
+
+template = SlottedTemplate("Project {project} is {status}.", StatusSlots)
+print(f"Max Channel Bits: {template.compute_max_bits():.2f} bits")
+safe_summary = template.render({"project": "Alpha", "status": "approved"})
+
+# 2. Cryptographic Human Attestation for Free-Text
+token = HumanDeclassificationAuthority.create_attestation(
+    content="M&A Deal approved by Board.",
+    approver_id="compliance_officer_1",
+    secret_key="shared-secret",
+    target_label=LABEL_PUBLIC,
+)
+assert HumanDeclassificationAuthority.verify_attestation(token, "M&A Deal approved by Board.", "shared-secret")
+```
+
+---
+
+## 9. Real-World Examples & Live Demonstrations
 
 For complete, runnable Pydantic AI agent demos showing JurisAST protecting production-grade workflows, see the [`examples/`](../examples/) directory.
 
-### Demo 1 — Enterprise M&A Knowledge Worker
+### Demo 1 — Live Gemini 2.5 Flash Validation
+End-to-end verification of field projection, conversational leak defense, and cryptographic HITL attestation:
+```bash
+set GEMINI_API_KEY=your_key_here  # Windows
+python examples/live_gemini_enhancements_demo.py
+```
 
+### Demo 2 — Enterprise M&A Knowledge Worker
 **Industry:** Investment banking, M&A advisory, corporate legal  
 **Pain point:** An internal LLM agent with access to confidential M&A strategy documents and an email tool. A prompt injection attack hidden in a document attempts to forward the board-level strategy to a competitor via email.  
 **JurisAST action:** Blocks `send_email()` the instant it detects the body is tainted with `INTERNAL/CONFIDENTIAL` data. The email is never sent.
 
 ```bash
-# Activate your venv, then:
 set GOOGLE_API_KEY=your_key_here  # Windows
 python examples/enterprise_ma_agent/app.py --attack   # Watch JurisAST block it
 python examples/enterprise_ma_agent/app.py            # See compliant flows too
 ```
 
-### Demo 2 — Global FinTech Support Agent (GDPR)
-
+### Demo 3 — Global FinTech Support Agent (GDPR)
 **Industry:** FinTech (Revolut, Wise, Stripe), banking, healthcare  
 **Regulation enforced:** GDPR Article 44/46 — EU citizen PII cannot flow to US servers without explicit safeguards  
 **Pain point:** A support agent investigates an EU customer payment failure and needs to create a Jira ticket for the US engineering team. Naive agent includes name, IBAN, and transaction history in the ticket — a GDPR violation carrying up to €1.2B fine risk.  

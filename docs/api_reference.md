@@ -76,6 +76,10 @@ class SecurityLabel(BaseModel):
   Returns `True` if `jurisdiction == Jurisdiction.EU`.
 - **`is_cross_border_risk(target_jurisdiction: Jurisdiction) -> bool`**  
   Returns `True` if data is EU PII and target jurisdiction is not in `EU_ADEQUATE_JURISDICTIONS`.
+- **`without_compartments(to_remove: Set[str] | FrozenSet[str]) -> SecurityLabel`**  
+  Returns a new `SecurityLabel` with the specified compartment tags removed.
+- **`to_tuple() -> tuple[int, int, frozenset[str]]`**  
+  Returns a hashable tuple representation `(jurisdiction.value, classification.value, compartments)`.
 
 ### Helper Functions & Constants
 
@@ -87,7 +91,7 @@ class SecurityLabel(BaseModel):
 
 ## 2. `jurisast_core.taint`
 
-Provides dynamic taint tracking and immutable audit trails.
+Provides dynamic taint tracking, field-level projections, and immutable audit trails.
 
 ### `ProvenanceRecord` (BaseModel)
 
@@ -99,7 +103,7 @@ class ProvenanceRecord(BaseModel):
     timestamp: datetime
     source_tool: str
     agent_id: str
-    operation: str  # "create", "propagate", "merge", "declassify", "handoff"
+    operation: str  # "create", "propagate", "merge", "declassify", "handoff", "project"
     label_before: SecurityLabel
     label_after: SecurityLabel
     details: Optional[str] = None
@@ -112,17 +116,20 @@ class ProvenanceRecord(BaseModel):
 
 ### `TaintedValue[T]` (BaseModel, Generic[T])
 
-Generic immutable container wrapping a value with its security label and provenance chain.
+Generic immutable container wrapping a value with its security label, field-level labels, and provenance chain.
 
 ```python
 class TaintedValue(BaseModel, Generic[T]):
     value: Any
     label: SecurityLabel
+    field_labels: Dict[str, SecurityLabel] = Field(default_factory=dict)
     provenance: List[ProvenanceRecord] = []
     taint_id: str
 ```
 
 #### Methods
+- **`project(field_path: str) -> TaintedValue`**  
+  Extracts a subfield and its isolated security label. Bypasses monotonic join over-tainting.
 - **`propagate(new_label, tool, agent_id, operation="propagate", details=None) -> TaintedValue[T]`**  
   Returns a **new** `TaintedValue` with updated label and appended provenance record.
 - **`declassify(target_label, declassified_value, tool, agent_id, max_bits, details=None) -> TaintedValue`**  
@@ -132,15 +139,23 @@ class TaintedValue(BaseModel, Generic[T]):
 - **`static create(value, label, source_tool, agent_id, details=None) -> TaintedValue`**  
   Factory method creating a `TaintedValue` with an initial creation record.
 
+### `TaintedRecord`
+
+Factory for constructing field-sensitive composite records.
+
+#### Methods
+- **`static create(data: dict[str, Any] | BaseModel, field_labels: dict[str, SecurityLabel], source_tool: str, agent_id: str = "agent", default_label: SecurityLabel = LABEL_PUBLIC) -> TaintedValue`**  
+  Constructs a `TaintedValue` where the record-level label is the join $\bigsqcup \text{field\_labels}$, and individual field labels are recorded in `field_labels`.
+
 ### `TaintRegistry`
 
-Session-scoped registry mapping string keys to `TaintedValue` instances.
+Session-scoped registry mapping string keys to `TaintedValue` instances. Supports field-level dot-notation accessors (`"tool_result.field_name"`).
 
 #### Methods
 - `register(key: str, tainted: TaintedValue) -> None`
-- `lookup(key: str) -> Optional[TaintedValue]`
+- `lookup(key: str) -> Optional[TaintedValue]`: Automatically resolves dot-notation field paths (e.g. `report.public_metrics` calls `record.project("public_metrics")`).
 - `lookup_or_raise(key: str) -> TaintedValue`
-- `get_label_for_args(args: dict[str, Any]) -> SecurityLabel`
+- `get_label_for_args(args: dict[str, Any]) -> SecurityLabel`: Resolves string arguments containing dot-notation keys to their exact projected labels.
 - `get_provenance_chain(key: str) -> List[ProvenanceRecord]`
 - `get_all_tainted() -> Dict[str, TaintedValue]`
 - `clear() -> None`
@@ -212,6 +227,41 @@ class AgentHandoffNode(BaseModel):
     description: Optional[str] = None
 ```
 
+#### `ProjectionNode`
+```python
+class ProjectionNode(BaseModel):
+    node_type: Literal["projection"] = "projection"
+    node_id: str
+    source_node_id: str
+    field_path: str
+    projected_label: SecurityLabel
+    description: Optional[str] = None
+```
+
+#### `ChatOutputSinkNode`
+```python
+class ChatOutputSinkNode(BaseModel):
+    node_type: Literal["chat_sink"] = "chat_sink"
+    node_id: str
+    target_user_id: str
+    user_clearance: SecurityLabel
+    input_node_ids: List[str]
+    description: Optional[str] = None
+```
+
+#### `HumanAttestedDeclassifyNode`
+```python
+class HumanAttestedDeclassifyNode(BaseModel):
+    node_type: Literal["human_attested_declassify"] = "human_attested_declassify"
+    node_id: str
+    input_node_id: str
+    approver_id: str
+    token_id: str
+    content_hash: str
+    output_label: SecurityLabel
+    description: Optional[str] = None
+```
+
 ### `ExecutionGraph` (BaseModel)
 
 A Directed Acyclic Graph (DAG) of AST nodes.
@@ -224,6 +274,9 @@ A Directed Acyclic Graph (DAG) of AST nodes.
 - `get_transforms() -> List[TransformNode]`
 - `get_declassifiers() -> List[DeclassifyNode]`
 - `get_handoffs() -> List[AgentHandoffNode]`
+- `get_projections() -> List[ProjectionNode]`
+- `get_chat_sinks() -> List[ChatOutputSinkNode]`
+- `get_human_declassifiers() -> List[HumanAttestedDeclassifyNode]`
 - `validate_structure() -> List[str]`: Validates acyclicity, edge reference consistency, and root/leaf integrity.
 - `is_valid() -> bool`
 
@@ -234,10 +287,22 @@ Fluent builder with automated edge wiring.
 ```python
 builder = ExecutionGraphBuilder(agent_id="agent_1")
 src = builder.add_source("fetch_data", LABEL_EU_PII)
-xfm = builder.add_transform("summarize", [src.node_id], LABEL_EU_PII)
-snk = builder.add_sink("send_webhook", Jurisdiction.EU, Classification.SENSITIVE_PII, [xfm.node_id])
+prj = builder.add_projection(src.node_id, "public_metrics", LABEL_PUBLIC)
+snk = builder.add_sink("send_webhook", Jurisdiction.EU, Classification.PUBLIC, [prj.node_id])
+chat = builder.add_chat_sink("visitor_1", LABEL_PUBLIC, [src.node_id])
 graph = builder.build()
 ```
+
+#### Methods
+- `add_source(tool_name, label, arguments=None, description=None) -> DataSourceNode`
+- `add_transform(operation, input_node_ids, output_label, description=None) -> TransformNode`
+- `add_sink(tool_name, target_jurisdiction, max_classification, input_node_ids, description=None) -> SinkNode`
+- `add_projection(source_node_id, field_path, projected_label, description=None) -> ProjectionNode`
+- `add_chat_sink(target_user_id, user_clearance, input_node_ids, description=None) -> ChatOutputSinkNode`
+- `add_human_attested_declassify(input_node_id, approver_id, token_id, content_hash, output_label, description=None) -> HumanAttestedDeclassifyNode`
+- `add_declassify(input_node_id, output_type, output_schema, output_label, max_bits, description=None) -> DeclassifyNode`
+- `add_handoff(source_agent_id, target_agent_id, input_node_ids, propagated_label, description=None) -> AgentHandoffNode`
+- `build() -> ExecutionGraph`
 
 ---
 
@@ -355,7 +420,7 @@ class PolicySet(BaseModel):
 
 ## 8. `jurisast_core.declassifier`
 
-Mathematical Shannon entropy limits and strict schema validation for controlled declassification.
+Mathematical Shannon entropy limits, slotted templates, pattern scrubbers, and cryptographic human attestations.
 
 ### `DeclassificationBoundary`
 - **`compute_max_bits(output_type: Any) -> float`**  
@@ -371,6 +436,34 @@ Mathematical Shannon entropy limits and strict schema validation for controlled 
   Enforces Pydantic strict mode validation (`TypeAdapter.validate_python(strict=True)`).
 - **`declassify_value(tainted_value, output_value, output_type, output_label, max_allowed_bits, agent_id, tool_name) -> TaintedValue`**  
   Validates entropy and runtime conformity, then issues a downgraded `TaintedValue` with full audit provenance.
+
+### `AttestationToken` (BaseModel)
+Cryptographically signed attestation issued by an authorized human compliance officer:
+```python
+class AttestationToken(BaseModel):
+    token_id: str
+    approver_id: str
+    target_label: SecurityLabel
+    content_hash: str          # SHA-256 of declassified content
+    issued_at: datetime
+    expires_at: Optional[datetime]
+    signature: str             # HMAC-SHA256 signature
+```
+
+### `HumanDeclassificationAuthority`
+Issues and cryptographically verifies human-in-the-loop (HITL) declassification tokens:
+- **`create_attestation(content, approver_id, secret_key, target_label, ttl_seconds=3600) -> AttestationToken`**: Generates a tamper-proof signed token.
+- **`verify_attestation(token, content, secret_key) -> bool`**: Verifies HMAC-SHA256 signature, expiry, and content hash.
+
+### `SlottedTemplate`
+Constrains natural language generation to predefined templates with typed, finite slots:
+- **`compute_max_bits() -> float`**: Computes the subadditive Shannon bound $\sum_{i=1}^m \log_2(|S_i|)$.
+- **`render(slots: dict[str, Any] | BaseModel) -> str`**: Validates slots against Pydantic schema and formats the template string.
+
+### `CompartmentScrubber`
+Pattern-based regex scrubber for removing categorical compartments:
+- **`scrub(text: str, scrub_compartments: Optional[Set[str]] = None) -> tuple[str, Set[str]]`**: Redacts credit cards, SSNs, phone numbers, and returns scrubbed text and identified compartments.
+- **`scrub_label(label: SecurityLabel, text: str) -> tuple[str, SecurityLabel]`**: Scrubs patterns and returns the sanitized text with stripped compartment labels.
 
 ---
 
@@ -398,7 +491,7 @@ Pre-built enterprise regulatory frameworks and policy builders.
 Pydantic AI agent integration layer and neuro-symbolic firewall.
 
 ### `JurisASTFirewall`
-Execution firewall intercepting tools via lifecycle hooks:
+Execution firewall intercepting tools via lifecycle hooks and guarding conversational responses:
 ```python
 firewall = JurisASTFirewall(
     config=JurisASTConfig(mode="enforce"),
@@ -408,10 +501,14 @@ firewall = JurisASTFirewall(
 )
 ```
 #### Methods
-- **`verify_tool_call(tool_name, tool_args, tool_callable) -> VerificationResult`**: Intercepts tool call, extracts AST, compiles active policies into Z3, proves safety, and blocks violations before API trigger.
-- **`record_tool_result(tool_name, tool_args, tool_result, tool_callable) -> Optional[TaintedValue]`**: Wraps outputs of `@tainted_source` and `@declassifier` tools into `TaintedValue` instances.
+- **`verify_tool_call(tool_name, tool_args, tool_callable) -> VerificationResult`**: Intercepts tool call, extracts AST (including field projections), compiles active policies into Z3, proves safety, and blocks violations before API trigger.
+- **`record_tool_result(tool_name, tool_args, tool_result, tool_callable) -> Optional[TaintedValue]`**: Wraps outputs of `@tainted_source` and `@declassifier` tools into `TaintedValue` instances and tracks session taint.
+- **`verify_chat_response(response_text: str, user_clearance: SecurityLabel, user_id: str = "default_user") -> None`**: Intercepts raw chat prose from the agent model. Verifies against all data sources read during the session. Raises `TaintViolationError` if response exceeds user clearance.
+- **`sanitize_chat_response(response_text: str, user_clearance: SecurityLabel, user_id: str = "default_user") -> str`**: Verifies chat response and safely replaces leaking content with `[REDACTED: SENSITIVE DATA EXCEEDS USER CLEARANCE]`.
+- **`register_field_projections(base_key: str, tainted: TaintedValue) -> None`**: Automatically flattens and registers subfield keys in `TaintRegistry` for dot-notation resolution.
 
 ### Tool Decorators
 - **`@tainted_source(jurisdiction, classification, compartments=None)`**: Annotates tools retrieving sensitive/sovereign data.
 - **`@tainted_sink(target_jurisdiction, max_classification)`**: Annotates tools emitting data to external destinations.
 - **`@declassifier(output_label, max_bits, output_type=None)`**: Annotates tools performing certified information downgrades.
+

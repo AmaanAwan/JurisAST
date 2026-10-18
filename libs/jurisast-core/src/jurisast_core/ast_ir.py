@@ -231,14 +231,111 @@ class AgentHandoffNode(BaseModel):
     )
 
 
+class ProjectionNode(BaseModel):
+    """
+    A node representing projection / field extraction from a composite record.
+
+    Solves the over-tainting and label creep problem: by isolating uncontaminated
+    fields, downstream sinks receive only the security label of the projected
+    fields rather than the joined least-upper-bound of the entire composite object.
+    """
+
+    node_type: Literal["projection"] = "projection"
+    node_id: str = Field(
+        default_factory=lambda: f"prj_{uuid.uuid4().hex[:8]}",
+    )
+    input_node_id: str = Field(
+        description="ID of the composite input node.",
+    )
+    field_names: List[str] = Field(
+        description="Names of the fields/attributes projected out.",
+    )
+    projected_label: SecurityLabel = Field(
+        description="The isolated security label of the projected fields.",
+    )
+    description: Optional[str] = Field(
+        default=None,
+    )
+
+
+class ChatOutputSinkNode(BaseModel):
+    """
+    A sink node representing conversational text output to an end-user.
+
+    Secures the conversational boundary against unstructured leaks.
+    Prevents an agent from reading sensitive data and exfiltrating it
+    via conversational prose back to an unprivileged user without invoking tools.
+    """
+
+    node_type: Literal["chat_sink"] = "chat_sink"
+    node_id: str = Field(
+        default_factory=lambda: f"csnk_{uuid.uuid4().hex[:8]}",
+    )
+    user_id: str = Field(
+        default="default_user",
+        description="Identifier of the recipient user.",
+    )
+    target_jurisdiction: Jurisdiction = Field(
+        default=Jurisdiction.INTERNAL,
+        description="The jurisdiction of the recipient user.",
+    )
+    max_classification: Classification = Field(
+        default=Classification.PUBLIC,
+        description="The maximum classification clearance of the user.",
+    )
+    input_node_ids: List[str] = Field(
+        default_factory=list,
+        description="IDs of nodes contributing to the conversational response.",
+    )
+    description: Optional[str] = Field(
+        default=None,
+    )
+
+
+class HumanAttestedDeclassifyNode(BaseModel):
+    """
+    A declassification node certified by cryptographic human-in-the-loop attestation.
+
+    Enables lawful declassification of unstructured free text (where Shannon
+    entropy is unbounded) by anchoring policy compliance in human responsibility
+    and cryptographic non-repudiation.
+    """
+
+    node_type: Literal["human_declassify"] = "human_declassify"
+    node_id: str = Field(
+        default_factory=lambda: f"hdcl_{uuid.uuid4().hex[:8]}",
+    )
+    input_node_id: str = Field(
+        description="ID of the tainted input node being declassified.",
+    )
+    approver_id: str = Field(
+        description="Identity of the reviewing compliance officer.",
+    )
+    target_label: SecurityLabel = Field(
+        description="The downgraded security label approved by the human.",
+    )
+    content_hash: str = Field(
+        description="SHA-256 hash of the human-reviewed text.",
+    )
+    signature: str = Field(
+        description="Cryptographic signature of the attestation.",
+    )
+    description: Optional[str] = Field(
+        default=None,
+    )
+
+
 # ─── Discriminated Union Type ────────────────────────────────────────────────
 
 ASTNode = Annotated[
     Union[
         DataSourceNode,
         TransformNode,
+        ProjectionNode,
         SinkNode,
+        ChatOutputSinkNode,
         DeclassifyNode,
+        HumanAttestedDeclassifyNode,
         AgentHandoffNode,
     ],
     Field(discriminator="node_type"),
@@ -329,9 +426,21 @@ class ExecutionGraph(BaseModel):
         """Get all TransformNode instances."""
         return [n for n in self.nodes if isinstance(n, TransformNode)]
 
+    def get_projections(self) -> List[ProjectionNode]:
+        """Get all ProjectionNode instances."""
+        return [n for n in self.nodes if isinstance(n, ProjectionNode)]
+
     def get_declassifiers(self) -> List[DeclassifyNode]:
         """Get all DeclassifyNode instances."""
         return [n for n in self.nodes if isinstance(n, DeclassifyNode)]
+
+    def get_human_declassifiers(self) -> List[HumanAttestedDeclassifyNode]:
+        """Get all HumanAttestedDeclassifyNode instances."""
+        return [n for n in self.nodes if isinstance(n, HumanAttestedDeclassifyNode)]
+
+    def get_chat_sinks(self) -> List[ChatOutputSinkNode]:
+        """Get all ChatOutputSinkNode instances."""
+        return [n for n in self.nodes if isinstance(n, ChatOutputSinkNode)]
 
     def get_handoffs(self) -> List[AgentHandoffNode]:
         """Get all AgentHandoffNode instances."""
@@ -476,6 +585,12 @@ class ExecutionGraph(BaseModel):
                 errors.append(
                     f"SinkNode '{sink_node.node_id}' has outgoing edges "
                     f"(sinks should be terminal nodes)."
+                )
+        for chat_sink in self.get_chat_sinks():
+            if chat_sink.node_id in outgoing:
+                errors.append(
+                    f"ChatOutputSinkNode '{chat_sink.node_id}' has outgoing edges "
+                    f"(chat sinks should be terminal nodes)."
                 )
 
         return errors
@@ -715,6 +830,115 @@ class ExecutionGraphBuilder:
         )
         self._register_node(node)
         self._add_edges_from_inputs(nid, input_node_ids)
+        return node
+
+    def add_projection(
+        self,
+        input_node_id: str,
+        field_names: List[str],
+        projected_label: SecurityLabel,
+        node_id: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> ProjectionNode:
+        """
+        Add a projection node to isolate fields and prevent label creep.
+
+        Args:
+            input_node_id: ID of the composite source/transform node.
+            field_names: Field names extracted from composite record.
+            projected_label: The isolated security label for the extracted fields.
+            node_id: Optional explicit node ID.
+            description: Optional description.
+
+        Returns:
+            The created ProjectionNode.
+        """
+        nid = node_id or f"prj_{uuid.uuid4().hex[:8]}"
+        node = ProjectionNode(
+            node_id=nid,
+            input_node_id=input_node_id,
+            field_names=field_names,
+            projected_label=projected_label,
+            description=description,
+        )
+        self._register_node(node)
+        self._add_edges_from_inputs(nid, [input_node_id])
+        return node
+
+    def add_chat_sink(
+        self,
+        target_jurisdiction: Jurisdiction = Jurisdiction.INTERNAL,
+        max_classification: Classification = Classification.PUBLIC,
+        input_node_ids: Optional[List[str]] = None,
+        user_id: str = "default_user",
+        node_id: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> ChatOutputSinkNode:
+        """
+        Add a chat sink node representing conversational response to an end-user.
+
+        Args:
+            target_jurisdiction: Recipient user's sovereignty clearance.
+            max_classification: Maximum sensitivity clearance of the user.
+            input_node_ids: IDs of session nodes flowing into conversational output.
+            user_id: Recipient user ID.
+            node_id: Optional explicit node ID.
+            description: Optional description.
+
+        Returns:
+            The created ChatOutputSinkNode.
+        """
+        nid = node_id or f"csnk_{uuid.uuid4().hex[:8]}"
+        inputs = input_node_ids or []
+        node = ChatOutputSinkNode(
+            node_id=nid,
+            user_id=user_id,
+            target_jurisdiction=target_jurisdiction,
+            max_classification=max_classification,
+            input_node_ids=inputs,
+            description=description,
+        )
+        self._register_node(node)
+        self._add_edges_from_inputs(nid, inputs)
+        return node
+
+    def add_human_declassifier(
+        self,
+        input_node_id: str,
+        approver_id: str,
+        target_label: SecurityLabel,
+        content_hash: str,
+        signature: str,
+        node_id: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> HumanAttestedDeclassifyNode:
+        """
+        Add a human-attested declassification node for free text.
+
+        Args:
+            input_node_id: ID of the tainted input node being declassified.
+            approver_id: Reviewer / compliance officer ID.
+            target_label: Downgraded label approved by human.
+            content_hash: SHA-256 hash of the human-reviewed text.
+            signature: Cryptographic signature of attestation.
+            node_id: Optional explicit node ID.
+            description: Optional description.
+
+        Returns:
+            The created HumanAttestedDeclassifyNode.
+        """
+        nid = node_id or f"hdcl_{uuid.uuid4().hex[:8]}"
+        node = HumanAttestedDeclassifyNode(
+            node_id=nid,
+            input_node_id=input_node_id,
+            approver_id=approver_id,
+            target_label=target_label,
+            content_hash=content_hash,
+            signature=signature,
+            description=description,
+        )
+        self._register_node(node)
+        self._add_edges_from_inputs(nid, [input_node_id])
         return node
 
     def build(self) -> ExecutionGraph:

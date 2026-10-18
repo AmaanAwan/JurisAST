@@ -57,3 +57,16 @@ class PatternFilterBaseline:
             "latency_ms": latency_ms,
             "reason": reason,
         }
+
+    def evaluate_payload(self, text: str) -> Dict[str, Any]:
+        """Evaluate raw payload string against the keyword blocklist."""
+        text_lower = text.lower()
+        for kw in self.BLOCKED_KEYWORDS:
+            if kw in text_lower:
+                return {
+                    "verdict": "VIOLATION",
+                    "keyword": kw,
+                    "reason": f"Detected blocked keyword '{kw}'",
+                }
+        return {"verdict": "SAFE", "reason": "No blocked keywords detected"}
+

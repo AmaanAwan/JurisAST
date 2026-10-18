@@ -1,7 +1,8 @@
 # JurisAST Master Benchmark: Formal Information Flow Control vs. SOTA AI Guardrails
 
 > **Comprehensive empirical evaluation comparing JurisAST formally verified Information Flow Control (IFC) against State-of-the-Art Neural Guardrails (Gemini 2.5 Flash CoT) and Keyword Heuristic Filters.**  
-> *Evaluated on: 2026-10-16 | Dataset: 1,050 multi-agent execution traces across 11 global regulatory regimes*
+> *Evaluated on: 2026-10-16 | Dataset: 1,050 multi-agent execution traces across 11 global regulatory regimes*  
+> *For the comprehensive 4-phase empirical protocol guide (AgentDojo, TaintBench, Declassification Stress, and White-Box Red Teaming), see: [Empirical Benchmarking Protocols](file:///c:/Users/Laptop/OneDrive/Desktop/Amaan/Startups-Initiatives/JurisAST-Agents/docs/empirical_benchmarking_protocols.md)*
 
 ---
 

@@ -75,7 +75,23 @@ def send_email(to: str, body: str) -> str:
 
 ## Examples
 
-### 1. [Enterprise M&A Knowledge Worker](./enterprise_ma_agent/)
+### 1. [Live Gemini 2.5 Flash Validation](./live_gemini_enhancements_demo.py)
+
+**Technology:** Google Gemini 2.5 Flash, Pydantic AI, JurisAST Neuro-Symbolic Firewall  
+**Threats Tested:**
+1. **Conversational Leak Exfiltration:** Attacker commands Gemini to read a confidential memo and reveal the secret offer price in conversational chat prose without calling external tools. Intercepted by `verify_chat_response()` and redacted.
+2. **Monotonic Label Creep & Field Projections:** Composite records with both public metrics and confidential deals. Proves public metrics are safely allowed to email, while confidential fields are blocked by Z3.
+3. **Free-Text Synthesis Declassification:** Cryptographic HMAC-SHA256 human attestation (with 100% tamper detection) and 5.49-bit Shannon-bounded slotted template synthesis.
+
+```bash
+# Run with Gemini API key:
+set GEMINI_API_KEY=your_key_here  # Windows
+python examples/live_gemini_enhancements_demo.py
+```
+
+---
+
+### 2. [Enterprise M&A Knowledge Worker](./enterprise_ma_agent/)
 
 **Industry:** Investment Banking, Legal, M&A Advisory, Corporate Strategy  
 **Threat:** Prompt injection attack causes agent to email confidential M&A strategy to an external competitor.  
@@ -90,7 +106,7 @@ python app.py --attack  # Just the attack
 
 ---
 
-### 2. [Global FinTech Support Agent](./fintech_support_agent/)
+### 3. [Global FinTech Support Agent](./fintech_support_agent/)
 
 **Industry:** FinTech (Revolut, Wise, Stripe, N26), Banking, Healthcare  
 **Regulation:** GDPR Article 46, EU AI Act, Schrems II  

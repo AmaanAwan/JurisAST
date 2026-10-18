@@ -2,7 +2,7 @@
 
 **Formally Verified Information Flow Control for Multi-Agent Systems via Neuro-Symbolic Execution Firewalls**
 
-[![Tests](https://img.shields.io/badge/tests-346%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-385%20passed-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![SMT: Z3](https://img.shields.io/badge/SMT-Microsoft%20Z3-blueviolet.svg)](https://github.com/Z3Prover/z3)
@@ -15,7 +15,7 @@
 > - The codebase is an early experimental implementation and may contain bugs, unverified edge cases, or breaking API changes.
 > - This project is shared publicly for **research, peer review, and community testing only**. Use at your own risk.
 
-> **Decoupling reasoning from verification**: Pydantic AI extracts an agent's multi-step intent into a strict Abstract Syntax Tree (AST), and a Microsoft Z3 SMT solver mathematically proves that the execution graph complies with cross-border data sovereignty and safety laws (e.g., GDPR, EU AI Act, PCI-DSS, HIPAA, CCPA, DORA, ITAR, Colorado AI Act, ISO 42001) in **< 5ms** before any external API is triggered.
+> **Decoupling reasoning from verification**: Pydantic AI extracts an agent's multi-step intent into a strict Abstract Syntax Tree (AST), and a Microsoft Z3 SMT solver mathematically proves that the execution graph complies with cross-border data sovereignty and safety laws (e.g., GDPR, EU AI Act, PCI-DSS, HIPAA, CCPA, DORA, ITAR, Colorado AI Act, ISO 42001) in **< 5ms** before any external API or chat prose is emitted.
 
 ---
 
@@ -32,12 +32,12 @@
 
 ## The JurisAST Triad
 
-1. **Pillar A: Pydantic-Driven AST Taint Propagation**  
-   Data provenance is anchored outside probabilistic prompt context via typed `SecurityLabel` product lattices and immutable `TaintedValue[T]` containers.
-2. **Pillar B: Latency-Free Non-Interference Proofs (Z3 Solver & Policy Engine)**  
-   Deterministic mathematical verification via assumption-based incremental SMT solving in `< 5ms`, with unsat core attribution identifying exact violating regulatory constraints.
-3. **Pillar C: Symbolic Declassification via Constrained Decoding**  
-   Strict schema enforcement bounds Shannon mutual information transfer ($I(X;Y) \le \log_2(|\mathcal{Y}|)$), enabling safe low-entropy extraction (e.g., boolean flags) without exfiltration risk.
+1. **Pillar A: Pydantic-Driven AST Taint Propagation & Field Projections**  
+   Data provenance is anchored outside probabilistic prompt context via typed `SecurityLabel` product lattices and immutable `TaintedValue[T]` containers. `TaintedRecord` and `ProjectionNode` isolate subfields to eliminate monotonic label creep.
+2. **Pillar B: Latency-Free Non-Interference Proofs & Conversational Firewall**  
+   Deterministic mathematical verification via assumption-based incremental SMT solving in `< 5ms`. `ChatOutputSinkNode` actively intercepts conversational prose, preventing LLMs from exfiltrating sensitive context in chat responses.
+3. **Pillar C: Tripartite Symbolic Declassification via Constrained Decoding & HITL**  
+   Strict schema enforcement and slotted templates bound Shannon mutual information transfer ($I(X;Y) \le \sum \log_2(|S_i|)$). Unbounded free-text summaries are authenticated via cryptographic HMAC-SHA256 human-in-the-loop attestations.
 
 ---
 
@@ -45,13 +45,15 @@
 
 | Guide | Description |
 |:---|:---|
-| 📖 [**Developer Quickstart**](docs/quickstart.md) | Step-by-step tutorial on labels, taint tracking, AST construction, Z3 solving, and regulatory policies |
-| 🏛️ [**System Architecture**](docs/architecture.md) | In-depth technical architecture, neuro-symbolic firewall concept, and sequence diagrams |
+| 📖 [**Developer Quickstart**](docs/quickstart.md) | Step-by-step tutorial on labels, taint tracking, AST construction, Z3 solving, conversational sinks, and regulatory policies |
+| 🏛️ [**System Architecture**](docs/architecture.md) | In-depth technical architecture, neuro-symbolic firewall concept, sequence diagrams, and threat model |
 | 📜 [**API Reference**](docs/api_reference.md) | Complete reference for all classes, methods, and types in `jurisast-core`, `jurisast-pydantic`, and `jurisast-policies` |
+| 🛠️ [**Issues & Engineering Playbook**](docs/issues_and_resolutions.md) | Exhaustive record of 14 major issues, root causes, SMT mathematical solutions, and verification steps |
 | ⚖️ [**Regulatory Mapping**](docs/regulatory_mapping.md) | Formal translation of GDPR, EU AI Act, and PCI-DSS rules into lattice invariants and policy sets |
-| 📐 [**Formal Verification**](docs/formal_verification.md) | Mathematical specification of product lattices, non-interference theorems, and Shannon bounding |
-| 🚀 [**Real-World Examples**](examples/README.md) | Two end-to-end runnable demos: M&A data exfiltration prevention and GDPR-compliant FinTech cross-border flows |
+| 📐 [**Formal Verification**](docs/formal_verification.md) | Mathematical specification of product lattices, non-interference theorems, SMT encodings, and Shannon bounding |
+| 🚀 [**Real-World Examples**](examples/README.md) | Live Gemini 2.5 Flash validation demo, enterprise M&A data exfiltration prevention, and GDPR FinTech flows |
 | 📊 [**Benchmarks & Evaluation**](docs/benchmarks.md) | Empirical evaluation: JurisAST Z3 firewall vs. Gemini LLM-as-a-Judge and heuristic baselines |
+| 🧪 [**Empirical Benchmarking Protocols**](docs/empirical_benchmarking_protocols.md) | Phase-by-phase empirical suite: AgentDojo Banking, TaintBench Memory, Declassification Fuzzing, White-Box Red-Teaming |
 | 🤝 [**Contributing Guide**](CONTRIBUTING.md) | Setup, formatting, type checking, and pull request workflows |
 | 🔒 [**Security Policy**](SECURITY.md) | Threat model, defense-in-depth architecture, and vulnerability reporting |
 
@@ -71,13 +73,13 @@ cd JurisAST-Agents
 # Install in development mode
 pip install -e ".[dev]"
 
-# Run all 346 unit, property, and integration tests
+# Run all 385 unit, property, and integration tests
 pytest tests/ -v
 
 # Run real-world examples (requires Gemini API key)
-# pydantic-ai >= 2.x uses GOOGLE_API_KEY
-set GOOGLE_API_KEY=your_key_here        # Windows
-# export GOOGLE_API_KEY=your_key_here   # Linux/macOS
+set GEMINI_API_KEY=your_key_here        # Windows
+# export GEMINI_API_KEY=your_key_here   # Linux/macOS
+python examples/live_gemini_enhancements_demo.py
 python examples/enterprise_ma_agent/app.py
 python examples/fintech_support_agent/app.py
 ```

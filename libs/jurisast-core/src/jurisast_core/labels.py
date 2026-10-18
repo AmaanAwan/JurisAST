@@ -26,7 +26,7 @@ Mathematical Foundation:
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Any, FrozenSet
+from typing import Any, FrozenSet, Iterable, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -265,6 +265,24 @@ class SecurityLabel(BaseModel):
         return (
             f"SecurityLabel({self.jurisdiction.name}/{self.classification.name}{comp_str})"
         )
+
+    def without_compartments(self, to_remove: Iterable[str]) -> SecurityLabel:
+        """
+        Return a new SecurityLabel with the specified compartments removed.
+
+        Used by deterministic compartment scrubbers to declassify categorical
+        need-to-know tags (e.g., stripping 'pii' or 'phi') without modifying
+        geographic sovereignty or classification clearance.
+        """
+        return SecurityLabel(
+            jurisdiction=self.jurisdiction,
+            classification=self.classification,
+            compartments=self.compartments - set(to_remove),
+        )
+
+    def to_tuple(self) -> Tuple[int, int, Tuple[str, ...]]:
+        """Return a hashable/serializable tuple representation."""
+        return (self.jurisdiction.value, self.classification.value, tuple(sorted(self.compartments)))
 
 
 # ─── Pre-built label constants for common use cases ───────────────────────────

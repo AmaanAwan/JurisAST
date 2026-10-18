@@ -51,9 +51,12 @@ from z3 import (
 from jurisast_core.ast_ir import (
     AgentHandoffNode,
     ASTNode,
+    ChatOutputSinkNode,
     DataSourceNode,
     DeclassifyNode,
     ExecutionGraph,
+    HumanAttestedDeclassifyNode,
+    ProjectionNode,
     SinkNode,
     TransformNode,
 )
@@ -178,10 +181,16 @@ class Z3SolverEngine:
                     self._encode_source(node)
                 case "transform":
                     self._encode_transform(node)
+                case "projection":
+                    self._encode_projection(node)
                 case "sink":
                     self._encode_sink(node)
+                case "chat_sink":
+                    self._encode_chat_sink(node)
                 case "declassify":
                     self._encode_declassifier(node)
+                case "human_declassify":
+                    self._encode_human_declassify(node)
                 case "agent_handoff":
                     self._encode_handoff(node)
 
@@ -293,6 +302,57 @@ class Z3SolverEngine:
             self._solver.add(j_var >= ij)
             self._solver.add(c_var >= ic)
             self._constraint_count += 2
+
+    def _encode_projection(self, node: ProjectionNode) -> None:
+        """
+        Encode fine-grained field projection.
+
+        The projection isolates specific fields, assigning the projected field's
+        specific label to the output variables rather than joining all fields,
+        preventing conservative over-tainting and label creep.
+        """
+        j_var, c_var = self._get_or_create_vars(node.node_id)
+        self._solver.add(j_var == node.projected_label.jurisdiction.value)
+        self._solver.add(c_var == node.projected_label.classification.value)
+        self._constraint_count += 2
+
+    def _encode_chat_sink(self, node: ChatOutputSinkNode) -> None:
+        """
+        Encode the non-interference invariant for a conversational chat sink.
+
+        Secures the conversational boundary: for each input node flowing into
+        the response, assert that input jurisdiction and classification do not
+        exceed the user's clearance.
+        """
+        sink_j = node.target_jurisdiction.value
+        sink_c = node.max_classification.value
+
+        for input_id in node.input_node_ids:
+            ij, ic = self._get_or_create_vars(input_id)
+
+            assumption_name = f"flow__{input_id}__to__{node.node_id}"
+            assumption = Bool(assumption_name)
+            self._assumptions.append(assumption)
+
+            policy = And(ij <= sink_j, ic <= sink_c)
+            self._solver.add(Implies(assumption, policy))
+            self._constraint_count += 1
+
+            self._assumption_names[assumption_name] = (
+                f"Conversational response to user '{node.user_id}' would leak data from '{input_id}': "
+                f"input requires clearance ≤ {node.target_jurisdiction.name}/{node.max_classification.name}"
+            )
+
+    def _encode_human_declassify(self, node: HumanAttestedDeclassifyNode) -> None:
+        """
+        Encode a human-attested declassification node for unstructured free text.
+
+        The output carries the human-approved downgraded label.
+        """
+        j_var, c_var = self._get_or_create_vars(node.node_id)
+        self._solver.add(j_var == node.target_label.jurisdiction.value)
+        self._solver.add(c_var == node.target_label.classification.value)
+        self._constraint_count += 2
 
     def add_custom_constraint(self, name: str, constraint: Any, description: str = "") -> None:
         """

@@ -19,25 +19,208 @@ Mathematical Principle:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import math
+import re
+import uuid
+from datetime import datetime, timezone
 from enum import Enum
 from typing import (
     Annotated,
     Any,
     Dict,
+    Generic,
     Literal,
     Optional,
+    Set,
+    Tuple,
     Type,
+    TypeVar,
     get_args,
     get_origin,
 )
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 
 from jurisast_core.exceptions import DeclassificationDeniedError
 from jurisast_core.labels import SecurityLabel
 from jurisast_core.taint import TaintedValue
+
+
+class AttestationToken(BaseModel):
+    """
+    Cryptographic attestation token certifying a human-in-the-loop review.
+
+    Used when declassifying unstructured free text (where Shannon mutual information
+    is theoretically unbounded) by binding the downgrade to a verified human review.
+    """
+
+    token_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique identifier for this attestation token.",
+    )
+    approver_id: str = Field(
+        description="Identity of the reviewing compliance officer or auditor.",
+    )
+    target_label: SecurityLabel = Field(
+        description="The downgraded security label approved for this content.",
+    )
+    content_hash: str = Field(
+        description="SHA-256 hash of the human-reviewed free-text content.",
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="UTC timestamp of the human approval.",
+    )
+    signature: str = Field(
+        description="HMAC-SHA256 signature validating token authenticity and integrity.",
+    )
+
+    model_config = {"frozen": True}
+
+
+class HumanDeclassificationAuthority:
+    """
+    Cryptographic authority for certifying free-text declassification.
+
+    Because open-ended natural language strings have unbounded Shannon capacity,
+    mathematical non-interference cannot prove that secrets are not encoded.
+    Therefore, declassification of unstructured free text must be anchored in
+    human accountability via cryptographic attestation.
+    """
+
+    @staticmethod
+    def generate_content_hash(content: str) -> str:
+        """Compute the SHA-256 hash of normalized text."""
+        return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def create_attestation(
+        content: str,
+        approver_id: str,
+        secret_key: str,
+        target_label: SecurityLabel,
+    ) -> AttestationToken:
+        """
+        Create a cryptographically signed attestation token for approved text.
+        """
+        content_hash = HumanDeclassificationAuthority.generate_content_hash(content)
+        ts = datetime.now(timezone.utc)
+        payload = f"{approver_id}:{content_hash}:{target_label.to_tuple()}:{ts.isoformat()}"
+        signature = hmac.new(
+            secret_key.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return AttestationToken(
+            approver_id=approver_id,
+            target_label=target_label,
+            content_hash=content_hash,
+            timestamp=ts,
+            signature=signature,
+        )
+
+    @staticmethod
+    def verify_attestation(
+        token: AttestationToken,
+        content: str,
+        secret_key: str,
+        max_age_seconds: Optional[float] = None,
+    ) -> bool:
+        """
+        Verify the signature, content integrity, and freshness of an attestation token.
+        """
+        content_hash = HumanDeclassificationAuthority.generate_content_hash(content)
+        if content_hash != token.content_hash:
+            return False
+
+        if max_age_seconds is not None:
+            age = (datetime.now(timezone.utc) - token.timestamp).total_seconds()
+            if age > max_age_seconds:
+                return False
+
+        payload = f"{token.approver_id}:{content_hash}:{token.target_label.to_tuple()}:{token.timestamp.isoformat()}"
+        expected_sig = hmac.new(
+            secret_key.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(token.signature, expected_sig)
+
+
+SlotModelT = TypeVar("SlotModelT", bound=BaseModel)
+
+
+class SlottedTemplate(Generic[SlotModelT]):
+    """
+    Template-based constrained synthesis engine.
+
+    Enables natural language summaries while mathematically bounding Shannon
+    mutual information capacity by restricting variable content to strictly typed,
+    finite-cardinality schema slots (Enums, Literals, bounded integers).
+
+    Total entropy satisfies subadditivity:
+        H(Output) <= sum(log2(|Slot_i|)) < infinity
+    """
+
+    def __init__(self, template: str, slot_model: Type[SlotModelT]) -> None:
+        self.template = template
+        self.slot_model = slot_model
+
+    def compute_max_bits(self) -> float:
+        """Calculate the Shannon entropy bound of the slot model."""
+        return DeclassificationBoundary.compute_max_bits(self.slot_model)
+
+    def render(self, slots: SlotModelT | Dict[str, Any]) -> str:
+        """Validate slots under Pydantic strict mode and render the template."""
+        if isinstance(slots, dict):
+            validated = self.slot_model.model_validate(slots, strict=True)
+        else:
+            validated = self.slot_model.model_validate(slots.model_dump(), strict=True)
+
+        values_dict = {}
+        for k, v in validated.model_dump().items():
+            if isinstance(v, Enum):
+                values_dict[k] = v.value
+            else:
+                values_dict[k] = v
+        return self.template.format(**values_dict)
+
+
+class CompartmentScrubber:
+    """
+    Deterministic pattern scrubber for categorical compartments.
+
+    Redacts sensitive patterns (credit cards, SSNs, emails, phones) in order
+    of specificity and removes the corresponding compartment tags from the data's SecurityLabel.
+    """
+
+    DEFAULT_PATTERNS: Dict[str, str] = {
+        "credit_card": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+        "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+        "email": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        "phone": r"(?:\+?[0-9]{1,3}[-.\s]?)?(?:\(?[0-9]{3}\)?[-.\s]?)?[0-9]{3}[-.\s]?[0-9]{4}\b",
+    }
+
+    @staticmethod
+    def scrub(
+        text: str,
+        target_compartments: Optional[Set[str]] = None,
+        replacement: str = "[REDACTED]",
+    ) -> Tuple[str, Set[str]]:
+        """
+        Scrub matching patterns from text and return (scrubbed_text, removed_compartments).
+        """
+        scrubbed = text
+        removed: Set[str] = set()
+        for comp_name, pat in CompartmentScrubber.DEFAULT_PATTERNS.items():
+            if target_compartments is None or comp_name in target_compartments:
+                if re.search(pat, scrubbed):
+                    scrubbed = re.sub(pat, replacement, scrubbed)
+                    removed.add(comp_name)
+        return scrubbed, removed
 
 
 class DeclassificationBoundary:
@@ -150,6 +333,13 @@ class DeclassificationBoundary:
                     total_bits += DeclassificationBoundary.compute_max_bits(field_annotation)
             return total_bits
 
+        # SlottedTemplate check
+        if isinstance(output_type, type) and issubclass(output_type, SlottedTemplate):
+            if hasattr(output_type, "slot_model"):
+                return DeclassificationBoundary.compute_max_bits(output_type.slot_model)
+        if isinstance(output_type, SlottedTemplate):
+            return output_type.compute_max_bits()
+
         # Explicit rejection of unbounded types
         if output_type in (str, float, dict, list, set, int):
             raise ValueError(
@@ -197,6 +387,33 @@ class DeclassificationBoundary:
         Raises:
             DeclassificationDeniedError: If validation fails.
         """
+        if isinstance(output_type, SlottedTemplate):
+            if isinstance(value, str):
+                return
+            if isinstance(value, dict):
+                allowed_keys = set(output_type.slot_model.model_fields.keys())
+                extra_keys = set(value.keys()) - allowed_keys
+                if extra_keys:
+                    raise DeclassificationDeniedError(
+                        f"Template slot dictionary contains unauthorized extra fields: {extra_keys}"
+                    )
+            try:
+                TypeAdapter(output_type.slot_model).validate_python(value, strict=True)
+                return
+            except ValidationError as e:
+                raise DeclassificationDeniedError(
+                    f"Template slot value failed strict validation: {e}"
+                ) from e
+
+        if isinstance(output_type, type) and issubclass(output_type, BaseModel):
+            if isinstance(value, dict):
+                allowed_keys = set(output_type.model_fields.keys())
+                extra_keys = set(value.keys()) - allowed_keys
+                if extra_keys:
+                    raise DeclassificationDeniedError(
+                        f"Model dictionary contains unauthorized extra fields: {extra_keys}"
+                    )
+
         try:
             adapter = TypeAdapter(output_type)
             adapter.validate_python(value, strict=True)
@@ -204,6 +421,59 @@ class DeclassificationBoundary:
             raise DeclassificationDeniedError(
                 f"Declassified value failed strict type validation for {output_type}: {e}"
             ) from e
+
+    @staticmethod
+    def validate_human_attestation(
+        token: AttestationToken,
+        content: str,
+        secret_key: str,
+        max_age_seconds: Optional[float] = None,
+    ) -> bool:
+        """
+        Verify human attestation token for free-text declassification.
+
+        Raises:
+            DeclassificationDeniedError: If attestation is invalid or content has been tampered with.
+        """
+        if not HumanDeclassificationAuthority.verify_attestation(
+            token=token,
+            content=content,
+            secret_key=secret_key,
+            max_age_seconds=max_age_seconds,
+        ):
+            raise DeclassificationDeniedError(
+                f"Human attestation failed for free text: invalid signature or content mismatch (hash={token.content_hash})"
+            )
+        return True
+
+    @classmethod
+    def declassify_free_text(
+        cls,
+        tainted_value: TaintedValue[Any],
+        text_content: str,
+        attestation_token: AttestationToken,
+        secret_key: str,
+        agent_id: str,
+        tool_name: str,
+        max_age_seconds: Optional[float] = None,
+    ) -> TaintedValue[str]:
+        """
+        Perform verified declassification on free-text content via cryptographic human attestation.
+        """
+        cls.validate_human_attestation(
+            token=attestation_token,
+            content=text_content,
+            secret_key=secret_key,
+            max_age_seconds=max_age_seconds,
+        )
+        return tainted_value.declassify(
+            target_label=attestation_token.target_label,
+            declassified_value=text_content,
+            tool=tool_name,
+            agent_id=agent_id,
+            max_bits=float("inf"),
+            details=f"Human-attested free-text declassification approved by {attestation_token.approver_id}",
+        )
 
     @classmethod
     def declassify_value(

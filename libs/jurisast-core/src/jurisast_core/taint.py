@@ -171,6 +171,10 @@ class TaintedValue(BaseModel, Generic[T]):
         default_factory=lambda: str(uuid.uuid4()),
         description="Unique identifier for this tainted value instance.",
     )
+    field_labels: Dict[str, SecurityLabel] = Field(
+        default_factory=dict,
+        description="Fine-grained security labels for individual fields or attributes.",
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -256,6 +260,54 @@ class TaintedValue(BaseModel, Generic[T]):
             taint_id=f"{self.taint_id}::declassified",
         )
 
+    def project(
+        self,
+        field_name: str,
+        tool: str = "project",
+        agent_id: str = "system",
+        details: Optional[str] = None,
+    ) -> TaintedValue:
+        """
+        Extract a specific field from a composite value with fine-grained security labeling.
+
+        Solves the over-tainting and label creep problem: if the composite value
+        contains field_labels for field_name, the projected value inherits ONLY that
+        field's security label rather than the joined label of the entire object.
+
+        Args:
+            field_name: Name of the field/attribute to extract.
+            tool: Tool/operation performing the projection.
+            agent_id: The agent performing the extraction.
+            details: Optional metadata.
+
+        Returns:
+            A new TaintedValue holding the projected field value and its specific label.
+        """
+        extracted_val: Any = None
+        if isinstance(self.value, dict):
+            extracted_val = self.value.get(field_name)
+        elif hasattr(self.value, field_name):
+            extracted_val = getattr(self.value, field_name)
+        else:
+            extracted_val = self.value
+
+        field_label = self.field_labels.get(field_name, self.label)
+
+        record = ProvenanceRecord(
+            source_tool=tool,
+            agent_id=agent_id,
+            operation="project",
+            label_before=self.label,
+            label_after=field_label,
+            details=details or f"Projected field '{field_name}'",
+        )
+        return TaintedValue(
+            value=extracted_val,
+            label=field_label,
+            provenance=[*self.provenance, record],
+            taint_id=f"{self.taint_id}::{field_name}",
+        )
+
     @staticmethod
     def merge_labels(values: Sequence[TaintedValue]) -> SecurityLabel:
         """
@@ -322,6 +374,55 @@ class TaintedValue(BaseModel, Generic[T]):
         )
 
 
+class TaintedRecord:
+    """
+    Factory for composite data structures with fine-grained field-level security labels.
+
+    Enables developers to attach distinct SecurityLabels to different attributes/keys
+    of a composite payload (e.g. public statistics vs confidential notes), allowing
+    downstream projections to avoid over-tainting and label creep.
+    """
+
+    @staticmethod
+    def create(
+        data: Dict[str, Any],
+        field_labels: Dict[str, SecurityLabel],
+        base_label: Optional[SecurityLabel] = None,
+        source_tool: str = "source",
+        agent_id: str = "system",
+        taint_id: Optional[str] = None,
+        details: Optional[str] = None,
+    ) -> TaintedValue[Dict[str, Any]]:
+        """
+        Create a TaintedValue representing a structured record with fine-grained field labels.
+        """
+        effective_base = base_label
+        if effective_base is None:
+            if field_labels:
+                labels_list = list(field_labels.values())
+                effective_base = labels_list[0]
+                for l in labels_list[1:]:
+                    effective_base = effective_base.join(l)
+            else:
+                effective_base = LABEL_PUBLIC
+
+        record = ProvenanceRecord(
+            source_tool=source_tool,
+            agent_id=agent_id,
+            operation="create_record",
+            label_before=LABEL_PUBLIC,
+            label_after=effective_base,
+            details=details or f"Created composite record with {len(field_labels)} labeled fields",
+        )
+        return TaintedValue(
+            value=data,
+            label=effective_base,
+            field_labels=field_labels,
+            provenance=[record],
+            taint_id=taint_id or str(uuid.uuid4()),
+        )
+
+
 class TaintRegistry:
     """
     Session-scoped registry of all tainted values in the current agent execution.
@@ -364,13 +465,28 @@ class TaintRegistry:
         """
         Look up a tainted value by key.
 
+        Supports field projection via dot-notation (e.g. 'report.public_stats').
+        If 'report' is registered and has field_labels for 'public_stats',
+        a projected TaintedValue with that field's label is returned.
+
         Args:
             key: The lookup key.
 
         Returns:
             The TaintedValue if found, None otherwise.
         """
-        return self._store.get(key)
+        if key in self._store:
+            return self._store[key]
+
+        if "." in key:
+            parent_key, field_name = key.split(".", 1)
+            parent_tv = self._store.get(parent_key)
+            if parent_tv is not None and field_name in parent_tv.field_labels:
+                projected = parent_tv.project(field_name)
+                self._store[key] = projected
+                return projected
+
+        return None
 
     def lookup_or_raise(self, key: str) -> TaintedValue:
         """
@@ -385,7 +501,7 @@ class TaintRegistry:
         Raises:
             TaintRegistryError: If the key is not found.
         """
-        result = self._store.get(key)
+        result = self.lookup(key)
         if result is None:
             raise TaintRegistryError(
                 f"Tainted value not found for key '{key}'. "
@@ -398,12 +514,7 @@ class TaintRegistry:
         Given tool call arguments, compute the joined label of all
         referenced tainted values.
 
-        This is the primary mechanism for resolving taint during AST construction.
-        For each argument value that matches a key in the registry, its label
-        is included in the join computation.
-
-        If no arguments reference tainted values, returns LABEL_PUBLIC (the
-        lattice bottom), indicating the data is untainted.
+        Supports dot-notation projection resolution.
 
         Args:
             args: The validated tool call arguments dictionary.
@@ -414,9 +525,12 @@ class TaintRegistry:
         """
         labels: list[SecurityLabel] = []
         for _key, value in args.items():
-            # Check if the argument value itself is a registry key
-            if isinstance(value, str) and value in self._store:
-                labels.append(self._store[value].label)
+            if isinstance(value, str):
+                tv = self.lookup(value)
+                if tv is not None:
+                    labels.append(tv.label)
+                    continue
+
             # Check if the argument value matches any taint_id
             for tv in self._store.values():
                 if isinstance(value, str) and value == tv.taint_id:

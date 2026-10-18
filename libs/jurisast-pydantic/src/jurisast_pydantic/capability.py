@@ -30,9 +30,10 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Literal, Optional
 
+from jurisast_core.ast_ir import ExecutionGraphBuilder
 from jurisast_core.config import JurisASTConfig
 from jurisast_core.exceptions import TaintViolationError
-from jurisast_core.labels import SecurityLabel
+from jurisast_core.labels import LABEL_PUBLIC, SecurityLabel
 from jurisast_core.solver import VerificationResult, Z3SolverEngine
 from jurisast_core.taint import TaintedValue, TaintRegistry
 
@@ -102,6 +103,13 @@ class JurisASTFirewall:
         self.extractor = ToolCallExtractor()
         self.audit_log: List[VerificationResult] = []
         self._total_verification_time_ms: float = 0.0
+        self._session_taint_label: SecurityLabel = LABEL_PUBLIC
+        self._session_source_nodes: List[str] = []
+
+    @property
+    def session_taint_label(self) -> SecurityLabel:
+        """Accumulated session-level taint label across all executed tools."""
+        return self._session_taint_label
 
     @property
     def mode(self) -> str:
@@ -135,6 +143,8 @@ class JurisASTFirewall:
                 else 0.0
             ),
             "taint_registry_size": self.taint_registry.size,
+            "session_taint_label": repr(self._session_taint_label),
+            "session_source_nodes": list(self._session_source_nodes),
         }
 
     def verify_tool_call(
@@ -292,22 +302,30 @@ class JurisASTFirewall:
         tool_type = metadata.get("type")
 
         if tool_type == "source":
-            # Wrap the result in a TaintedValue and register
             label: SecurityLabel = metadata["label"]
-            tainted = TaintedValue.create(
-                value=tool_result,
-                label=label,
-                source_tool=tool_name,
-                agent_id=self.agent_id,
-                details=f"Retrieved by {tool_name}",
-            )
+            if isinstance(tool_result, TaintedValue):
+                tainted = tool_result
+            else:
+                tainted = TaintedValue.create(
+                    value=tool_result,
+                    label=label,
+                    source_tool=tool_name,
+                    agent_id=self.agent_id,
+                    details=f"Retrieved by {tool_name}",
+                )
             # Register under the tool name as the primary key
             self.taint_registry.register(tool_name, tainted)
 
             # Also register under the tool result if it's a string
-            # (so downstream tools can reference it by value)
             if isinstance(tool_result, str):
                 self.taint_registry.register(tool_result, tainted)
+
+            # Register field-level taints if present
+            for fname, flabel in tainted.field_labels.items():
+                self.taint_registry.register(f"{tool_name}.{fname}", tainted.project(fname))
+
+            self._session_taint_label = self._session_taint_label.join(tainted.label)
+            self._session_source_nodes.append(f"src_{tool_name}")
 
             logger.debug(
                 "[REGISTERED] Tool '%s' produced tainted value with label %s",
@@ -317,19 +335,23 @@ class JurisASTFirewall:
             return tainted
 
         elif tool_type == "declassifier":
-            # Register the declassified result with the downgraded label
             output_label: SecurityLabel = metadata["output_label"]
-            tainted = TaintedValue.create(
-                value=tool_result,
-                label=output_label,
-                source_tool=tool_name,
-                agent_id=self.agent_id,
-                details=f"Declassified by {tool_name} ({metadata.get('max_bits', '?')} bits)",
-            )
+            if isinstance(tool_result, TaintedValue):
+                tainted = tool_result
+            else:
+                tainted = TaintedValue.create(
+                    value=tool_result,
+                    label=output_label,
+                    source_tool=tool_name,
+                    agent_id=self.agent_id,
+                    details=f"Declassified by {tool_name} ({metadata.get('max_bits', '?')} bits)",
+                )
             self.taint_registry.register(tool_name, tainted)
 
             if isinstance(tool_result, str):
                 self.taint_registry.register(tool_result, tainted)
+
+            self._session_source_nodes.append(f"dcl_{tool_name}")
 
             logger.debug(
                 "[DECLASSIFIED] Tool '%s' produced declassified value with label %s",
@@ -340,8 +362,126 @@ class JurisASTFirewall:
 
         return None
 
+    def verify_chat_response(
+        self,
+        response_text: str,
+        user_clearance: Optional[SecurityLabel] = None,
+        user_id: str = "default_user",
+    ) -> VerificationResult:
+        """
+        Verify an agent's final conversational response against the user's security clearance.
+
+        Prevents unstructured conversational leaks: proves mathematically via Z3 that
+        information retrieved during the session does not leak to an under-cleared user
+        through conversational prose, even if no external tool sinks were called.
+
+        Args:
+            response_text: The conversational text output generated by the LLM.
+            user_clearance: The security clearance of the recipient user (defaults to PUBLIC).
+            user_id: Identifier of the recipient user.
+
+        Returns:
+            VerificationResult with status and latency.
+
+        Raises:
+            TaintViolationError: If mode is 'enforce' and conversational leak is detected.
+        """
+        target_clearance = user_clearance or LABEL_PUBLIC
+
+        builder = ExecutionGraphBuilder(agent_id=self.agent_id)
+        input_node_ids: List[str] = []
+
+        all_tainted = self.taint_registry.get_all_tainted()
+        if all_tainted:
+            for key, tv in all_tainted.items():
+                if "." in key:
+                    continue
+                node_id = f"src_sess_{key}"
+                builder.add_source(
+                    tool_name=key,
+                    label=tv.label,
+                    arguments={"content": str(tv.value)[:50] if tv.value is not None else ""},
+                    node_id=node_id,
+                    description=f"Session data from '{key}'",
+                )
+                input_node_ids.append(node_id)
+
+        if not input_node_ids:
+            src = builder.add_source(
+                tool_name="chat_input",
+                label=LABEL_PUBLIC,
+                arguments={"text": response_text[:50]},
+                node_id="src_chat_public",
+                description="Public chat input",
+            )
+            input_node_ids = [src.node_id]
+
+        builder.add_chat_sink(
+            target_jurisdiction=target_clearance.jurisdiction,
+            max_classification=target_clearance.classification,
+            input_node_ids=input_node_ids,
+            user_id=user_id,
+            node_id=f"csnk_{user_id}",
+            description=f"Conversational response to user '{user_id}'",
+        )
+
+        graph = builder.build()
+
+        solver = Z3SolverEngine(timeout_ms=self.config.solver.timeout_ms)
+        solver.encode_graph(graph)
+
+        if self.policies is not None:
+            solver.add_policy_constraints(self.policies, graph)
+
+        result = solver.verify()
+        self._total_verification_time_ms += result.latency_ms
+        self.audit_log.append(result)
+
+        if result.status == "VIOLATION":
+            violation_msg = (
+                f"Conversational leak blocked for user '{user_id}': "
+                + "; ".join(result.violation_details)
+            )
+            if self.config.mode == "enforce":
+                logger.warning("[CONVERSATIONAL LEAK BLOCKED] %s", violation_msg)
+                raise TaintViolationError(
+                    violation_msg,
+                    violated_constraints=result.violated_constraints,
+                    policy_name="conversational_clearance",
+                )
+            elif self.config.mode == "audit":
+                logger.warning("[AUDIT CONVERSATIONAL LEAK] %s", violation_msg)
+            else:
+                logger.info("[PERMISSIVE CONVERSATIONAL LEAK] %s", violation_msg)
+
+        elif result.status == "TIMEOUT":
+            timeout_msg = f"Z3 solver timeout during conversational verification ({result.latency_ms:.2f}ms)"
+            if self.config.mode == "enforce" and self.config.fail_closed:
+                logger.warning("[BLOCKED] %s (fail-closed)", timeout_msg)
+                raise TaintViolationError(f"{timeout_msg} (fail-closed)", policy_name="solver_timeout")
+
+        return result
+
+    def sanitize_chat_response(
+        self,
+        response_text: str,
+        user_clearance: Optional[SecurityLabel] = None,
+        user_id: str = "default_user",
+        redacted_placeholder: str = "[REDACTED: SENSITIVE DATA EXCEEDS USER CLEARANCE]",
+    ) -> str:
+        """
+        Verify conversational response, redacting output if verification fails.
+        """
+        try:
+            self.verify_chat_response(response_text, user_clearance, user_id)
+            return response_text
+        except TaintViolationError:
+            return redacted_placeholder
+
     def reset(self) -> None:
         """Reset the firewall state, clearing audit log and taint registry."""
         self.audit_log.clear()
         self._total_verification_time_ms = 0.0
         self.taint_registry.clear()
+        self._session_taint_label = LABEL_PUBLIC
+        self._session_source_nodes.clear()
